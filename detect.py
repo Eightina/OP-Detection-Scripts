@@ -30,7 +30,8 @@ import os
 import platform
 import sys
 from pathlib import Path
-
+import cv2
+from BinOpenpose import pyopenpose as op
 import torch
 
 FILE = Path(__file__).resolve()
@@ -86,16 +87,28 @@ def run(
         source = check_file(source)  # download
 
     # Directories
+    # Openpose
+    params = dict()
+    params["model_folder"] = "OpenposeModels"
+    # Yolo
     save_dir = increment_path(Path(project) / name, exist_ok=exist_ok)  # increment run
     (save_dir / 'labels' if save_txt else save_dir).mkdir(parents=True, exist_ok=True)  # make dir
 
     # Load model
+    # op
+    opWrapper = op.WrapperPython()
+    opWrapper.configure(params)
+    opWrapper.start()
+    # yolo
     device = select_device(device)
     model = DetectMultiBackend(weights, device=device, dnn=dnn, data=data, fp16=half)
     stride, names, pt = model.stride, model.names, model.pt
     imgsz = check_img_size(imgsz, s=stride)  # check image size
 
     # Dataloader
+    # op
+    datum = op.Datum()
+    # yolo
     if webcam:
         view_img = check_imshow()
         dataset = LoadStreams(source, img_size=imgsz, stride=stride, auto=pt, vid_stride=vid_stride)
@@ -108,7 +121,9 @@ def run(
     # Run inference
     model.warmup(imgsz=(1 if pt else bs, 3, *imgsz))  # warmup
     seen, windows, dt = 0, [], (Profile(), Profile(), Profile())
+    
     for path, im, im0s, vid_cap, s in dataset:
+        
         with dt[0]:
             im = torch.from_numpy(im).to(device)
             im = im.half() if model.fp16 else im.float()  # uint8 to fp16/32
