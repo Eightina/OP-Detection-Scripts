@@ -1,0 +1,1 @@
+ATTENTION: this folder saves trained model files (weights) for YOLOV5S

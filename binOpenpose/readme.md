@@ -1,0 +1,1 @@
+ATTENTION: this folder saves the binary files from openpose compilation (*.dll, *.pyd, *.exe, *.exp, *.lib).
