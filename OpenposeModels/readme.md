@@ -1,0 +1,1 @@
+ATTENTNION: this folder saves the model files from openpose compilation.
