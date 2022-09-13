@@ -87,18 +87,18 @@ def run(
         source = check_file(source)  # download
 
     # Directories
-    # Openpose
-    params = dict()
-    params["model_folder"] = "OpenposeModels"
+    # # Openpose
+    # params = dict()
+    # params["model_folder"] = "OpenposeModels"
     # Yolo
     save_dir = increment_path(Path(project) / name, exist_ok=exist_ok)  # increment run
     (save_dir / 'labels' if save_txt else save_dir).mkdir(parents=True, exist_ok=True)  # make dir
 
     # Load model
-    # op
-    opWrapper = op.WrapperPython()
-    opWrapper.configure(params)
-    opWrapper.start()
+    # # op
+    # opWrapper = op.WrapperPython()
+    # opWrapper.configure(params)
+    # opWrapper.start()
     # yolo
     device = select_device(device)
     model = DetectMultiBackend(weights, device=device, dnn=dnn, data=data, fp16=half)
@@ -107,7 +107,7 @@ def run(
 
     # Dataloader
     # op
-    datum = op.Datum()
+    # datum = op.Datum()
     # yolo
     if webcam:
         view_img = check_imshow()
