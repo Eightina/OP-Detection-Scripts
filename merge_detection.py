@@ -8,6 +8,7 @@ from sys import platform
 import argparse
 import torch
 from pathlib import Path
+import numpy as np
 
 # yolo
 FILE = Path(__file__).resolve()
@@ -21,6 +22,8 @@ from utils.general import (LOGGER, Profile, check_file, check_img_size, check_im
                         increment_path, non_max_suppression, print_args, scale_coords, strip_optimizer, xyxy2xywh)
 from utils.plots import Annotator, colors, save_one_box
 from utils.torch_utils import select_device, smart_inference_mode
+from utils.augmentations import (Albumentations, augment_hsv, classify_albumentations, classify_transforms, copy_paste,
+                                letterbox, mixup, random_perspective)
 from BinOpenpose import pyopenpose as op
 
 def run(        
@@ -51,11 +54,22 @@ def run(
         half = True,  # use FP16 half-precision inference
         dnn = True,  # use OpenCV DNN for ONNX inference
         vid_stride = 1,  # video frame-rate stride):
-        model_folder = "OpenposeModels"  # bin folder name of openpose models
+        # transforms = False; 
+        op_folder = "OpenposeModels"  # bin folder name of openpose models
 ):
+    source = str(source)
+    save_img = not nosave and not source.endswith('.txt')  # save inference images
+    is_file = Path(source).suffix[1:] in (IMG_FORMATS + VID_FORMATS)
+    is_url = source.lower().startswith(('rtsp://', 'rtmp://', 'http://', 'https://'))
+    webcam = source.isnumeric() or source.endswith('.txt') or (is_url and not is_file)
+    if is_url and is_file:
+        source = check_file(source)  # download
+    save_dir = increment_path(Path(project) / name, exist_ok=exist_ok)  # increment run
+    (save_dir / 'labels' if save_txt else save_dir).mkdir(parents=True, exist_ok=True)  # make dir
+
     # Starting OpenPose
     op_params = dict()
-    op_params["model_folder"] = model_folder
+    op_params["model_folder"] = op_folder
     opWrapper = op.WrapperPython()
     opWrapper.configure(op_params)
     opWrapper.start()
@@ -65,6 +79,7 @@ def run(
     stride, names, pt = model.stride, model.names, model.pt
     imgsz = check_img_size(imgsz, s=stride)  # check image size
     
+    # op init
     datum = op.Datum()
     cap = cv2.VideoCapture(source)
     # cap = cv2.VideoCapture("./input/videos/railway-construction-site.avi")
@@ -73,6 +88,12 @@ def run(
     framecount = cap.get(cv2.CAP_PROP_FRAME_COUNT)
     print('Total frames in this video: ' + str(framecount))
     videoWriter = cv2.VideoWriter("./output/op720_2.avi", cv2.VideoWriter_fourcc('D', 'I', 'V', 'X'), fps, size)
+    # yolo init
+    bs = 1
+    model.warmup(imgsz=(1 if pt else bs, 3, *imgsz))  # warmup
+    seen, windows, dt = 0, [], (Profile(), Profile(), Profile())
+    
+    
     while cap.isOpened():
         hasFrame, frame = cap.read()
         if hasFrame:
@@ -80,9 +101,40 @@ def run(
             opWrapper.emplaceAndPop(op.VectorDatum([datum]))
             frame_res = datum.poseKeypoints
             
+            # create_mask()
             
+            # yolo inferencing--------
+            # preprocessing img
+            # im = transforms(im0)
+            im = letterbox(frame, imgsz, stride=stride, auto=pt)[0]  # padded resize
+            im = im.transpose((2, 0, 1))[::-1]  # HWC to CHW, BGR to RGB
+            im = np.ascontiguousarray(im)  # contiguous
+            # inferencing
+            with dt[0]:
+                im = torch.from_numpy(im).to(device)
+                im = im.half() if model.fp16 else im.float()  # uint8 to fp16/32
+                im /= 255  # 0 - 255 to 0.0 - 1.0
+                if len(im.shape) == 3:
+                    im = im[None]  # expand for batch dim
+            # Inference
+            with dt[1]:
+                # visualize = increment_path(save_dir / Path(path).stem, mkdir=True) if visualize else False
+                pred = model(im, augment=augment, visualize=visualize)
+            # NMS
+            with dt[2]:
+                pred = non_max_suppression(pred, conf_thres, iou_thres, classes, agnostic_nms, max_det=max_det)
             
+            # yolo process predictions--------
+            for i, det in enumerate(pred):  # per image
+                seen += 1
+                if webcam:  # batch_size >= 1
+                    p, im0, frame = path[i], im0s[i].copy(), dataset.count
+                    s += f'{i}: '
+                else:
+                    p, im0, frame = path, im0s.copy(), getattr(dataset, 'frame', 0)
+
             
+            # visualization & output
             opframe = datum.cvOutputData
             cv2.imshow("Site Danger Detection based on OpenPose 1.7.0 & YOLOv5s", opframe)
             videoWriter.write(opframe)
@@ -103,7 +155,7 @@ def parse_opt():
     parser.add_argument('--iou-thres', type=float, default=0.45, help='NMS IoU threshold')
     parser.add_argument('--max-det', type=int, default=1000, help='maximum detections per image')
     parser.add_argument('--device', default='', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
-    parser.add_argument('--view-img', action='store_true', help='show results')
+    parser.add_argument('--view-img', default=True, action='store_true', help='show results')
     parser.add_argument('--save-txt', action='store_true', help='save results to *.txt')
     parser.add_argument('--save-conf', action='store_true', help='save confidences in --save-txt labels')
     parser.add_argument('--save-crop', action='store_true', help='save cropped prediction boxes')
@@ -122,7 +174,8 @@ def parse_opt():
     parser.add_argument('--half', default=True, action='store_true', help='use FP16 half-precision inference')
     parser.add_argument('--dnn', default=True, action='store_true', help='use OpenCV DNN for ONNX inference')
     parser.add_argument('--vid-stride', type=int, default=1, help='video frame-rate stride')
-    parser.add_argument('--model-folder', type=str, default="OpenposeModels", help='bin folder name of openpose models')
+    # parser.add_argument('--transforms', default=False, action='store_true', help='transform to img')
+    parser.add_argument('--op-folder', type=str, default="OpenposeModels", help='bin folder name of openpose models')
     opt = parser.parse_args()
     opt.imgsz *= 2 if len(opt.imgsz) == 1 else 1  # expand
     print_args(vars(opt))
